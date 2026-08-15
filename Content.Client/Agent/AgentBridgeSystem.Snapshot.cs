@@ -102,8 +102,15 @@ public sealed partial class AgentBridgeSystem
             alerts,
             map = map.MapId.ToString(),
             grid = xform.GridUid is { } g ? Ref(g) : null,
+
+            // Grid tile indices. This is the coordinate space everything else in the snapshot
+            // uses — entity tiles and the atmos grid.
             tile = TileOf(player) is { } t ? new[] { t.X, t.Y } : null,
-            position = new[] { MathF.Round(map.X, 2), MathF.Round(map.Y, 2) },
+
+            // Map space, NOT grid space. Named explicitly because the two diverge arbitrarily
+            // once the grid moves or rotates, and reading them as the same space produces
+            // confident nonsense.
+            mapPosition = new[] { MathF.Round(map.X, 2), MathF.Round(map.Y, 2) },
         };
     }
 
@@ -134,7 +141,7 @@ public sealed partial class AgentBridgeSystem
     private object[] BuildEntities(EntityUid player, EntityCoordinates coords, int radius)
     {
         var found = _lookup.GetEntitiesInRange(coords, radius);
-        var result = new List<(string name, object entry)>();
+        var result = new List<(string name, string id, Vector2i? tile)>();
 
         foreach (var ent in found)
         {
@@ -159,17 +166,26 @@ public sealed partial class AgentBridgeSystem
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
-            result.Add((name, (object) new
-            {
-                id = Ref(ent),
-                name,
-                tile = TileOf(ent) is { } t ? new[] { t.X, t.Y } : null,
-            }));
+            result.Add((name, Ref(ent), TileOf(ent)));
         }
 
-        // Sorted by name so repeated snapshots diff cleanly rather than reordering arbitrarily.
-        return result.OrderBy(e => e.name, StringComparer.OrdinalIgnoreCase)
-            .Select(e => e.Item2)
+        // Grouped by name: nine hydroponics trays become one entry with nine tiles rather than
+        // nine near-identical objects. This also collapses the wall spam, which was about a
+        // third of the list.
+        //
+        // "tiles" and "ids" are index-aligned: ids[i] is the entity at tiles[i]. The ids are what
+        // examine/verbs/highlight take as a target, and are the only way to name one particular
+        // tray out of nine.
+        return result
+            .GroupBy(e => e.name, StringComparer.Ordinal)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(object (g) => new
+            {
+                name = g.Key,
+                count = g.Count(),
+                tiles = g.Select(e => e.tile is { } t ? new[] { t.X, t.Y } : null).ToArray(),
+                ids = g.Select(e => e.id).ToArray(),
+            })
             .ToArray();
     }
 
