@@ -244,6 +244,10 @@ binds:
 - function: ToggleAgentPanel
   type: State
   key: F12
+- function: FocusAgentInput
+  type: State
+  mod1: Shift
+  key: F12
 - function: OpenAHelp
   type: State
   key: F1

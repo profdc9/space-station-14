@@ -132,6 +132,7 @@ namespace Content.Client.Input
             common.AddFunction(ContentKeyFunctions.OpenAdminMenu);
             common.AddFunction(ContentKeyFunctions.OpenGuidebook);
             common.AddFunction(ContentKeyFunctions.ToggleAgentPanel);
+            common.AddFunction(ContentKeyFunctions.FocusAgentInput);
         }
     }
 }

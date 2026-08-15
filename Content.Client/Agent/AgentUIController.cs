@@ -35,6 +35,8 @@ public sealed class AgentUIController : UIController,
         CommandBinds.Builder
             .Bind(ContentKeyFunctions.ToggleAgentPanel,
                 InputCmdHandler.FromDelegate(_ => TogglePanel()))
+            .Bind(ContentKeyFunctions.FocusAgentInput,
+                InputCmdHandler.FromDelegate(_ => FocusInput()))
             .Register<AgentUIController>();
     }
 
@@ -86,7 +88,22 @@ public sealed class AgentUIController : UIController,
             return;
         }
 
+        // Deliberately does NOT take keyboard focus. The panel is advisory and mostly read-only;
+        // opening it must never silently disable movement. Use FocusAgentInput to type.
         _window.OpenCenteredRight();
+    }
+
+    /// <summary>
+    ///     Opens the panel if needed and puts the caret in the input box.
+    /// </summary>
+    private void FocusInput()
+    {
+        if (_window == null)
+            return;
+
+        if (!_window.IsOpen)
+            _window.OpenCenteredRight();
+
         _window.FocusInput();
     }
 
