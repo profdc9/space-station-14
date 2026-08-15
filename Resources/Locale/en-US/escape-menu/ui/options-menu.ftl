@@ -213,6 +213,7 @@ ui-options-function-open-tile-spawn-window = Open tile spawn menu
 ui-options-function-open-decal-spawn-window = Open decal spawn menu
 ui-options-function-open-admin-menu = Open admin menu
 ui-options-function-open-guidebook = Open guidebook
+ui-options-function-toggle-agent-panel = Toggle copilot panel
 ui-options-function-window-close-all = Close all windows
 ui-options-function-window-close-recent = Close recent window
 ui-options-function-show-escape-menu = Toggle game menu

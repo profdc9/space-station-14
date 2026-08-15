@@ -241,6 +241,9 @@ binds:
 - function: OpenGuidebook
   type: State
   key: NumpadNum0
+- function: ToggleAgentPanel
+  type: State
+  key: F12
 - function: OpenAHelp
   type: State
   key: F1
