@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Content.Client.Agent.Bridge;
 using Robust.Shared.Configuration;
 
@@ -32,6 +33,11 @@ public sealed partial class AgentBridgeSystem : EntitySystem
 
     private readonly List<AgentMessage> _transcript = new();
     private readonly List<AgentNotification> _notifications = new();
+
+    /// <summary>How many past events stay replayable through <c>since</c>.</summary>
+    private const int EventLogLimit = 500;
+
+    private readonly List<(ulong cursor, string name, object payload)> _eventLog = new();
 
     private AgentBridgeServer? _server;
 
@@ -76,6 +82,14 @@ public sealed partial class AgentBridgeSystem : EntitySystem
         // game state happens here, on the game thread.
         SetConnection(_server.State);
 
+        _alertPollAccumulator += frameTime;
+
+        if (_alertPollAccumulator >= AlertPollInterval)
+        {
+            _alertPollAccumulator = 0f;
+            PollAlerts();
+        }
+
         while (_server.TryDequeue(out var frame))
         {
             HandleFrame(frame);
@@ -119,14 +133,49 @@ public sealed partial class AgentBridgeSystem : EntitySystem
     }
 
     /// <summary>
-    ///     Pushes an unsolicited event to the copilot, stamped with the next cursor value.
+    ///     Records an event and pushes it to the copilot, stamped with the next cursor value.
     /// </summary>
+    /// <remarks>
+    ///     Recorded whether or not anything is connected. The copilot may attach mid-round and
+    ///     immediately ask what it missed, and "nothing happened before you arrived" would be a lie.
+    /// </remarks>
     private void RaiseBridgeEvent(string name, object payload)
     {
-        if (_server == null)
-            return;
+        var cursor = ++_cursor;
 
-        _server.Send(BridgeProtocol.Event(name, ++_cursor, payload));
+        _eventLog.Add((cursor, name, payload));
+
+        if (_eventLog.Count > EventLogLimit)
+            _eventLog.RemoveRange(0, _eventLog.Count - EventLogLimit);
+
+        _server?.Send(BridgeProtocol.Event(name, cursor, payload));
+    }
+
+    /// <summary>
+    ///     Everything recorded after <paramref name="after"/>, oldest first.
+    /// </summary>
+    private object BuildSince(ulong after)
+    {
+        var events = new JsonArray();
+        var dropped = false;
+
+        // If the caller's cursor predates the oldest thing we still hold, say so rather than
+        // silently returning a partial history that looks complete.
+        if (_eventLog.Count > 0 && after < _eventLog[0].cursor - 1)
+            dropped = true;
+
+        foreach (var (cursor, name, payload) in _eventLog)
+        {
+            if (cursor > after)
+                events.Add(BridgeProtocol.EventNode(name, cursor, payload));
+        }
+
+        return new
+        {
+            cursor = _cursor,
+            truncated = dropped,
+            events,
+        };
     }
 
     /// <summary>
@@ -187,6 +236,35 @@ public sealed partial class AgentBridgeSystem : EntitySystem
                 }
 
                 _server?.Send(BridgeProtocol.Ok(id, snapshot));
+                break;
+
+            case "since":
+                var after = parameters.ValueKind == JsonValueKind.Object
+                            && parameters.TryGetProperty("cursor", out var cur)
+                            && cur.TryGetUInt64(out var parsedCursor)
+                    ? parsedCursor
+                    : 0UL;
+
+                _server?.Send(BridgeProtocol.Ok(id, BuildSince(after)));
+                break;
+
+            case "examine":
+                if (!TryGetString(parameters, "entity", out var target))
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "bad_params", "entity is required"));
+                    break;
+                }
+
+                var examined = BuildExamine(target);
+
+                if (examined == null)
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "not_found",
+                        $"{target} is unknown, gone, or not visible from here"));
+                    break;
+                }
+
+                _server?.Send(BridgeProtocol.Ok(id, examined));
                 break;
 
             case "say_to_human":

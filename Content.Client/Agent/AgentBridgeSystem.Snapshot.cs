@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Content.Shared.Alert;
 using Content.Shared.Atmos;
@@ -40,6 +41,14 @@ public sealed partial class AgentBridgeSystem
     /// <summary>Largest observation radius in tiles. Beyond this the payload stops being readable.</summary>
     private const int MaxRadius = 12;
     private const int DefaultRadius = 7;
+
+    private readonly HashSet<string> _knownAlerts = new();
+    private readonly HashSet<string> _seenAlerts = new();
+
+    /// <summary>Seconds between alert polls. Alerts are not eventful enough to check every tick.</summary>
+    private const float AlertPollInterval = 0.5f;
+
+    private float _alertPollAccumulator;
 
     [Dependency] private ISharedPlayerManager _player = default!;
     [Dependency] private SharedTransformSystem _xform = default!;
@@ -320,6 +329,103 @@ public sealed partial class AgentBridgeSystem
         rows[radius] = new string(row);
 
         return rows;
+    }
+
+    /// <summary>
+    ///     The game's own examine text for an entity, as plain text.
+    /// </summary>
+    /// <remarks>
+    ///     Uses the client-side text rather than asking the server. Upstream's own note on this
+    ///     (<c>Content.Client/Examine/ExamineSystem.cs:420</c>) is that the client version "will
+    ///     usually be correct (barring server-only components, which generally only adds, not
+    ///     replaces text)" — so this can be missing lines, but should not be *wrong*. Fetching the
+    ///     server's version needs an async request/response pair with careful id selection, since
+    ///     an id colliding with <c>ExamineSystem._idCounter</c> would pop a tooltip in the human's
+    ///     face. Worth doing if this proves too thin in practice.
+    ///
+    ///     Deliberately does NOT call <c>DoExamine</c>, which opens that tooltip.
+    /// </remarks>
+    private object? BuildExamine(string reference)
+    {
+        if (_player.LocalEntity is not { } player || !Exists(player))
+            return null;
+
+        if (!TryResolve(reference, out var target))
+            return null;
+
+        // Same visibility rule as the snapshot: if the human could not examine it, neither can
+        // the copilot.
+        if (!_examine.CanExamine(player, target.Value))
+            return null;
+
+        var text = _examine.GetExamineText(target.Value, player);
+
+        return new
+        {
+            entity = reference,
+            name = Identity.Name(target.Value, EntityManager, player),
+            tile = TileOf(target.Value) is { } t ? new[] { t.X, t.Y } : null,
+            text = text.ToString(),
+            clientSideOnly = true,
+        };
+    }
+
+    /// <summary>
+    ///     Turns an <c>e:&lt;netid&gt;</c> reference back into a live local entity.
+    /// </summary>
+    private bool TryResolve(string reference, [NotNullWhen(true)] out EntityUid? entity)
+    {
+        entity = null;
+
+        if (!reference.StartsWith("e:", StringComparison.Ordinal))
+            return false;
+
+        if (!int.TryParse(reference.AsSpan(2), out var raw))
+            return false;
+
+        if (!TryGetEntity(new NetEntity(raw), out var uid) || !Exists(uid))
+            return false;
+
+        entity = uid;
+        return true;
+    }
+
+    /// <summary>
+    ///     Emits <c>alert</c> events when the player's alert set changes — low pressure, cold,
+    ///     hunger, crit. This is the safety-critical half of what <c>since</c> carries.
+    /// </summary>
+    private void PollAlerts()
+    {
+        if (_player.LocalEntity is not { } player
+            || !Exists(player)
+            || !TryComp<AlertsComponent>(player, out var alerts))
+        {
+            _knownAlerts.Clear();
+            return;
+        }
+
+        _seenAlerts.Clear();
+
+        foreach (var key in alerts.Alerts.Keys)
+        {
+            if (key.AlertType is not { } type)
+                continue;
+
+            var name = type.Id;
+            _seenAlerts.Add(name);
+
+            if (_knownAlerts.Add(name))
+                RaiseBridgeEvent("alert", new { alert = name, state = "entered" });
+        }
+
+        _knownAlerts.RemoveWhere(known =>
+        {
+            if (_seenAlerts.Contains(known))
+                return false;
+
+            RaiseBridgeEvent("alert", new { alert = known, state = "cleared" });
+            return true;
+        });
     }
 
     private Vector2i? TileOf(EntityUid uid)

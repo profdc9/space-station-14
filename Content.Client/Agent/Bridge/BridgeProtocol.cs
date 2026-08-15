@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Content.Client.Agent.Bridge;
@@ -32,13 +33,21 @@ public static class BridgeProtocol
 
     public static string Event(string name, ulong cursor, object payload)
     {
-        // The event name and cursor are merged into the payload object rather than nested, so the
-        // MCP side reads one flat object per event.
+        return EventNode(name, cursor, payload).ToJsonString(Options);
+    }
+
+    /// <summary>
+    ///     One event as a JSON object. The name and cursor are merged into the payload rather than
+    ///     nested, so the MCP side reads one flat object per event whether it arrives live or as
+    ///     part of a <c>since</c> replay.
+    /// </summary>
+    public static JsonNode EventNode(string name, ulong cursor, object payload)
+    {
         var node = JsonSerializer.SerializeToNode(payload, Options)!.AsObject();
 
         node["event"] = name;
         node["cursor"] = cursor;
 
-        return node.ToJsonString(Options);
+        return node;
     }
 }
