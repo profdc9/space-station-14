@@ -170,6 +170,25 @@ public sealed partial class AgentBridgeSystem : EntitySystem
                 _server?.Send(BridgeProtocol.Ok(id, new { pong = true, cursor = _cursor }));
                 break;
 
+            case "snapshot":
+                var radius = parameters.ValueKind == JsonValueKind.Object
+                             && parameters.TryGetProperty("radius", out var r)
+                             && r.TryGetInt32(out var parsed)
+                    ? parsed
+                    : 7;
+
+                var snapshot = BuildSnapshot(radius);
+
+                if (snapshot == null)
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "no_player",
+                        "not attached to an entity — lobby, ghost, or round restart"));
+                    break;
+                }
+
+                _server?.Send(BridgeProtocol.Ok(id, snapshot));
+                break;
+
             case "say_to_human":
                 if (!TryGetString(parameters, "text", out var say))
                 {
