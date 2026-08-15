@@ -1,3 +1,8 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
+using Content.Client.Agent.Bridge;
+using Robust.Shared.Configuration;
+
 namespace Content.Client.Agent;
 
 /// <summary>
@@ -14,7 +19,7 @@ namespace Content.Client.Agent;
 ///     Registration is by reflection: nothing upstream references this type. See PLAN.md §3.
 ///     </para>
 /// </remarks>
-public sealed class AgentBridgeSystem : EntitySystem
+public sealed partial class AgentBridgeSystem : EntitySystem
 {
     /// <summary>
     ///     How many conversation lines and notifications are kept for replay into a freshly
@@ -22,8 +27,19 @@ public sealed class AgentBridgeSystem : EntitySystem
     /// </summary>
     private const int HistoryLimit = 200;
 
+    // Not readonly: RA0051 — the injector assigns [Dependency] fields after construction.
+    [Dependency] private IConfigurationManager _cfg = default!;
+
     private readonly List<AgentMessage> _transcript = new();
     private readonly List<AgentNotification> _notifications = new();
+
+    private AgentBridgeServer? _server;
+
+    /// <summary>
+    ///     Monotonic sequence stamped on every event, so the copilot can ask for everything after
+    ///     a point it has already seen rather than re-reading the world.
+    /// </summary>
+    private ulong _cursor;
 
     public AgentConnectionState Connection { get; private set; } = AgentConnectionState.Disconnected;
     public AgentControlMode Mode { get; private set; } = AgentControlMode.Observe;
@@ -39,12 +55,39 @@ public sealed class AgentBridgeSystem : EntitySystem
     {
         base.Initialize();
 
-        Log.Debug("Agent bridge initialised (phase 0: no transport).");
+        if (!_cfg.GetCVar(AgentCVars.BridgeEnabled))
+        {
+            Log.Debug("Copilot bridge disabled by cvar; running as a stock client.");
+            return;
+        }
+
+        _server = new AgentBridgeServer(Log);
+        _server.Start(_cfg.GetCVar(AgentCVars.BridgePort), _cfg.GetCVar(AgentCVars.BridgeToken));
+    }
+
+    public override void Update(float frameTime)
+    {
+        base.Update(frameTime);
+
+        if (_server == null)
+            return;
+
+        // The socket runs on its own threads and only ever moves strings. Everything that touches
+        // game state happens here, on the game thread.
+        SetConnection(_server.State);
+
+        while (_server.TryDequeue(out var frame))
+        {
+            HandleFrame(frame);
+        }
     }
 
     public override void Shutdown()
     {
         base.Shutdown();
+
+        _server?.Dispose();
+        _server = null;
 
         MessageAdded = null;
         NotificationAdded = null;
@@ -66,10 +109,119 @@ public sealed class AgentBridgeSystem : EntitySystem
 
         AddMessage(AgentSpeaker.Human, text);
 
-        // Phase 1 replaces this with a send over the bridge socket.
         if (Connection != AgentConnectionState.Connected)
+        {
             AddMessage(AgentSpeaker.System, Loc.GetString("agent-no-bridge"));
+            return;
+        }
+
+        RaiseBridgeEvent("human", new { text });
     }
+
+    /// <summary>
+    ///     Pushes an unsolicited event to the copilot, stamped with the next cursor value.
+    /// </summary>
+    private void RaiseBridgeEvent(string name, object payload)
+    {
+        if (_server == null)
+            return;
+
+        _server.Send(BridgeProtocol.Event(name, ++_cursor, payload));
+    }
+
+    /// <summary>
+    ///     Dispatches one inbound frame. Game thread.
+    /// </summary>
+    private void HandleFrame(string frame)
+    {
+        int id;
+        string? op;
+        JsonElement root;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(frame);
+
+            // Clone: the JsonDocument is disposed at the end of this scope, and params may be
+            // read after that point.
+            root = doc.RootElement.Clone();
+
+            id = root.TryGetProperty("id", out var idProp) ? idProp.GetInt32() : 0;
+            op = root.TryGetProperty("op", out var opProp) ? opProp.GetString() : null;
+        }
+        catch (JsonException e)
+        {
+            Log.Warning($"Copilot sent unparseable frame: {e.Message}");
+            _server?.Send(BridgeProtocol.Error(0, "bad_json", e.Message));
+            return;
+        }
+
+        if (op == null)
+        {
+            _server?.Send(BridgeProtocol.Error(id, "missing_op"));
+            return;
+        }
+
+        var parameters = root.TryGetProperty("params", out var p) ? p : default;
+
+        switch (op)
+        {
+            case "ping":
+                _server?.Send(BridgeProtocol.Ok(id, new { pong = true, cursor = _cursor }));
+                break;
+
+            case "say_to_human":
+                if (!TryGetString(parameters, "text", out var say))
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "bad_params", "text is required"));
+                    break;
+                }
+
+                AddMessage(AgentSpeaker.Agent, say);
+                _server?.Send(BridgeProtocol.Ok(id));
+                break;
+
+            case "notify":
+                if (!TryGetString(parameters, "text", out var text))
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "bad_params", "text is required"));
+                    break;
+                }
+
+                var urgency = TryGetString(parameters, "urgency", out var u)
+                    ? ParseUrgency(u)
+                    : AgentUrgency.Normal;
+
+                Notify(text, urgency);
+                _server?.Send(BridgeProtocol.Ok(id));
+                break;
+
+            default:
+                _server?.Send(BridgeProtocol.Error(id, "unknown_op", op));
+                break;
+        }
+    }
+
+    private static bool TryGetString(JsonElement parameters, string name, [NotNullWhen(true)] out string? value)
+    {
+        value = null;
+
+        if (parameters.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (!parameters.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.String)
+            return false;
+
+        value = prop.GetString();
+        return value != null;
+    }
+
+    private static AgentUrgency ParseUrgency(string value) => value.ToLowerInvariant() switch
+    {
+        "low" => AgentUrgency.Low,
+        "high" => AgentUrgency.High,
+        _ => AgentUrgency.Normal,
+    };
 
     public void AddMessage(AgentSpeaker speaker, string text)
     {
