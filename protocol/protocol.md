@@ -57,7 +57,34 @@ One connection is served at a time; a second connection waits in the accept back
 | `since` | `cursor` | Events recorded after `cursor`, oldest first. See below. |
 | `examine` | `entity` (`e:<netid>`) | The game's own examine text. See below. |
 | `verbs` | `entity` | *planned* — legal interactions per the game |
-| `annotate` | `kind`, `entity`/`coords`, `label`, `ttl` | *planned* (Phase 2) |
+| `annotate` | `kind`, plus the fields below | Draws into the human's view. Returns `{ mark: "m:<n>" }`. |
+| `clear_marks` | `id` (optional) | Removes one mark, or all. Returns `{ cleared: <n> }`. |
+
+### annotate
+
+```jsonc
+{ "op": "annotate", "params": { "kind": "highlight", "entity": "e:6913",
+                                "label": "this one", "colour": "orange", "ttl": 120 } }
+{ "op": "annotate", "params": { "kind": "mark", "tile": [-34, -10], "label": "over here" } }
+{ "op": "annotate", "params": { "kind": "path", "tiles": [[-36,-10], [-35,-10], [-34,-10]] } }
+```
+
+| kind | needs | drawn as |
+|---|---|---|
+| `highlight` | `entity` | outline that follows the entity, label above it |
+| `mark` | `tile` | box on the tile, label beside it |
+| `path` | `tiles` (≥2) | breadcrumb line, ring at the destination |
+
+`colour` takes a name or hex and falls back rather than erroring — a mark in the wrong colour beats
+no mark. `ttl` is seconds, default 30, clamped to 600. Marks expire on their own so a forgetful
+agent does not litter the screen; at most 64 are held, oldest dropped first.
+
+Tiles are grid indices on **the grid the human is standing on**, matching `snapshot`. `no_grid` is
+returned if they are not on one.
+
+**Annotations are client-local.** Nothing is sent to the game server, no other player can see them,
+and they touch no gameplay state. That is what makes drawing safe to give an advisory agent: being
+wrong produces visual clutter, not a game action.
 
 `id` is echoed in the response. Frames without `op` are rejected.
 

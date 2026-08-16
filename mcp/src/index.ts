@@ -198,6 +198,111 @@ server.registerTool(
 );
 
 server.registerTool(
+  'highlight',
+  {
+    title: 'Outline something in the human\'s view',
+    description:
+      'Draws an outline and label around an entity on the human\'s screen, so they can find it by ' +
+      'looking rather than by parsing coordinates. This is the best answer to "where is the X" — ' +
+      'point at it instead of describing where it is. Client-side only: no other player sees it, ' +
+      'and it touches nothing in the game world.',
+    inputSchema: {
+      entity: z.string().describe('Entity id from observe/look, e.g. "e:6913".'),
+      label: z.string().optional().describe('Short text shown beside it. Two or three words.'),
+      colour: z.string().optional().describe('Colour name or hex. Default yellow.'),
+      ttl: z.number().min(1).max(600).optional().describe('Seconds before it fades. Default 30.'),
+    },
+  },
+  async ({ entity, label, colour, ttl }) =>
+    guard(async () => {
+      const r = await bridge.call<{ mark: string }>('annotate', {
+        kind: 'highlight',
+        entity,
+        label: label ?? '',
+        colour,
+        ttl,
+      });
+      return `Outlined ${entity} in the human's view (mark ${r.mark}).`;
+    }),
+);
+
+server.registerTool(
+  'mark',
+  {
+    title: 'Put a marker on a tile',
+    description:
+      'Marks a tile on the human\'s screen — a waypoint, a breach, somewhere to avoid. Tile ' +
+      'coordinates come from observe or look, and are on the grid the human is standing on.',
+    inputSchema: {
+      tile: z.tuple([z.number().int(), z.number().int()]).describe('Grid tile, e.g. [-20, 5].'),
+      label: z.string().optional(),
+      colour: z.string().optional().describe('Colour name or hex. Default cyan.'),
+      ttl: z.number().min(1).max(600).optional(),
+    },
+  },
+  async ({ tile, label, colour, ttl }) =>
+    guard(async () => {
+      const r = await bridge.call<{ mark: string }>('annotate', {
+        kind: 'mark',
+        tile,
+        label: label ?? '',
+        colour,
+        ttl,
+      });
+      return `Marked ${tile[0]},${tile[1]} (mark ${r.mark}).`;
+    }),
+);
+
+server.registerTool(
+  'path_hint',
+  {
+    title: 'Draw a route',
+    description:
+      'Draws a breadcrumb line through a series of tiles, ending in a ring at the destination. ' +
+      'Use it to show a way through, not to give turn-by-turn directions in text. You are ' +
+      'responsible for the route being walkable — check the map from look for walls first.',
+    inputSchema: {
+      tiles: z
+        .array(z.tuple([z.number().int(), z.number().int()]))
+        .min(2)
+        .describe('Waypoints in order, starting near the human.'),
+      label: z.string().optional().describe('Shown at the destination.'),
+      colour: z.string().optional().describe('Colour name or hex. Default green.'),
+      ttl: z.number().min(1).max(600).optional(),
+    },
+  },
+  async ({ tiles, label, colour, ttl }) =>
+    guard(async () => {
+      const r = await bridge.call<{ mark: string }>('annotate', {
+        kind: 'path',
+        tiles,
+        label: label ?? '',
+        colour,
+        ttl,
+      });
+      return `Drew a ${tiles.length}-point route (mark ${r.mark}).`;
+    }),
+);
+
+server.registerTool(
+  'clear_marks',
+  {
+    title: 'Remove annotations',
+    description:
+      'Removes a mark by id, or all of them when given no id. Marks expire on their own, so this ' +
+      'is for clearing advice that has gone stale early.',
+    inputSchema: {
+      id: z.string().optional().describe('Mark id, e.g. "m:3". Omit to clear everything.'),
+    },
+  },
+  async ({ id }) =>
+    guard(async () => {
+      const r = await bridge.call<{ cleared: number }>('clear_marks', id ? { id } : {});
+      return r.cleared === 0 ? 'Nothing to clear.' : `Cleared ${r.cleared} mark(s).`;
+    }),
+);
+
+server.registerTool(
   'bridge_status',
   {
     title: 'Check the bridge',
