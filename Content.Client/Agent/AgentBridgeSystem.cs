@@ -30,6 +30,7 @@ public sealed partial class AgentBridgeSystem : EntitySystem
 
     // Not readonly: RA0051 — the injector assigns [Dependency] fields after construction.
     [Dependency] private IConfigurationManager _cfg = default!;
+    [Dependency] private AgentAnnotationSystem _annotations = default!;
 
     private readonly List<AgentMessage> _transcript = new();
     private readonly List<AgentNotification> _notifications = new();
@@ -267,6 +268,15 @@ public sealed partial class AgentBridgeSystem : EntitySystem
                 _server?.Send(BridgeProtocol.Ok(id, examined));
                 break;
 
+            case "annotate":
+                HandleAnnotate(id, parameters);
+                break;
+
+            case "clear_marks":
+                var cleared = _annotations.Clear(TryGetString(parameters, "id", out var markId) ? markId : null);
+                _server?.Send(BridgeProtocol.Ok(id, new { cleared }));
+                break;
+
             case "say_to_human":
                 if (!TryGetString(parameters, "text", out var say))
                 {
@@ -297,6 +307,147 @@ public sealed partial class AgentBridgeSystem : EntitySystem
                 _server?.Send(BridgeProtocol.Error(id, "unknown_op", op));
                 break;
         }
+    }
+
+    /// <summary>
+    ///     Draws something into the human's view. Client-local only — see <see cref="AgentAnnotationSystem"/>.
+    /// </summary>
+    private void HandleAnnotate(int id, JsonElement parameters)
+    {
+        if (!TryGetString(parameters, "kind", out var kind))
+        {
+            _server?.Send(BridgeProtocol.Error(id, "bad_params", "kind is required"));
+            return;
+        }
+
+        var label = TryGetString(parameters, "label", out var l) ? l : string.Empty;
+        var ttl = parameters.TryGetProperty("ttl", out var t) && t.TryGetSingle(out var parsedTtl)
+            ? parsedTtl
+            : (float?) null;
+
+        var colourText = TryGetString(parameters, "colour", out var c) ? c
+            : TryGetString(parameters, "color", out var c2) ? c2
+            : null;
+
+        switch (kind)
+        {
+            case "highlight":
+            {
+                if (!TryGetString(parameters, "entity", out var reference) || !TryResolve(reference, out var uid))
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "not_found", "entity is unknown or gone"));
+                    return;
+                }
+
+                var mark = _annotations.Add(
+                    AgentMarkKind.Highlight,
+                    label,
+                    AgentAnnotationSystem.ParseColour(colourText, Color.Yellow),
+                    ttl,
+                    entity: GetNetEntity(uid.Value));
+
+                _server?.Send(BridgeProtocol.Ok(id, new { mark = mark.Id }));
+                return;
+            }
+
+            case "mark":
+            {
+                if (!TryReadTile(parameters, "tile", out var tile))
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "bad_params", "tile must be [x, y]"));
+                    return;
+                }
+
+                if (_annotations.CurrentGrid() is not { } grid)
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "no_grid", "the human is not standing on a grid"));
+                    return;
+                }
+
+                var mark = _annotations.Add(
+                    AgentMarkKind.Tile,
+                    label,
+                    AgentAnnotationSystem.ParseColour(colourText, Color.Cyan),
+                    ttl,
+                    grid: grid,
+                    tiles: [tile]);
+
+                _server?.Send(BridgeProtocol.Ok(id, new { mark = mark.Id }));
+                return;
+            }
+
+            case "path":
+            {
+                if (!parameters.TryGetProperty("tiles", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "bad_params", "tiles must be an array of [x, y]"));
+                    return;
+                }
+
+                var tiles = new List<Vector2i>();
+
+                foreach (var element in arr.EnumerateArray())
+                {
+                    if (TryReadTilePair(element, out var tile))
+                        tiles.Add(tile);
+                }
+
+                if (tiles.Count < 2)
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "bad_params", "a path needs at least two tiles"));
+                    return;
+                }
+
+                if (_annotations.CurrentGrid() is not { } grid)
+                {
+                    _server?.Send(BridgeProtocol.Error(id, "no_grid", "the human is not standing on a grid"));
+                    return;
+                }
+
+                var mark = _annotations.Add(
+                    AgentMarkKind.Path,
+                    label,
+                    AgentAnnotationSystem.ParseColour(colourText, Color.LimeGreen),
+                    ttl,
+                    grid: grid,
+                    tiles: tiles.ToArray());
+
+                _server?.Send(BridgeProtocol.Ok(id, new { mark = mark.Id }));
+                return;
+            }
+
+            default:
+                _server?.Send(BridgeProtocol.Error(id, "bad_params", $"unknown annotation kind '{kind}'"));
+                return;
+        }
+    }
+
+    private static bool TryReadTile(JsonElement parameters, string name, out Vector2i tile)
+    {
+        tile = default;
+
+        return parameters.ValueKind == JsonValueKind.Object
+               && parameters.TryGetProperty(name, out var element)
+               && TryReadTilePair(element, out tile);
+    }
+
+    private static bool TryReadTilePair(JsonElement element, out Vector2i tile)
+    {
+        tile = default;
+
+        if (element.ValueKind != JsonValueKind.Array || element.GetArrayLength() != 2)
+            return false;
+
+        var values = element.EnumerateArray();
+
+        if (!values.MoveNext() || !values.Current.TryGetInt32(out var x))
+            return false;
+
+        if (!values.MoveNext() || !values.Current.TryGetInt32(out var y))
+            return false;
+
+        tile = new Vector2i(x, y);
+        return true;
     }
 
     private static bool TryGetString(JsonElement parameters, string name, [NotNullWhen(true)] out string? value)
