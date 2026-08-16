@@ -196,4 +196,38 @@ public sealed class AgentAnnotationSystem : EntitySystem
         world = Vector2.Transform(local, xform.GetWorldMatrix(gridUid.Value));
         return true;
     }
+
+    /// <summary>
+    ///     World rotation of a grid.
+    /// </summary>
+    /// <remarks>
+    ///     Needed because a station is generally rotated relative to world axes, and SS14 turns the
+    ///     camera with it. A rectangle drawn axis-aligned in world space therefore appears skewed
+    ///     against the very tiles it is meant to line up with. Everything drawn on a grid has to
+    ///     carry the grid's rotation.
+    /// </remarks>
+    public Angle GridRotation(NetEntity gridRef)
+    {
+        if (!TryGetEntity(gridRef, out var gridUid) || !Exists(gridUid))
+            return Angle.Zero;
+
+        return EntityManager.System<SharedTransformSystem>().GetWorldRotation(gridUid.Value);
+    }
+
+    /// <summary>
+    ///     Rotation of the grid an entity is standing on, so highlights line up with the station
+    ///     rather than with world axes.
+    /// </summary>
+    public Angle GridRotationOf(EntityUid uid)
+    {
+        if (!Exists(uid))
+            return Angle.Zero;
+
+        var grid = Transform(uid).GridUid;
+
+        if (grid is not { } g)
+            return Angle.Zero;
+
+        return EntityManager.System<SharedTransformSystem>().GetWorldRotation(g);
+    }
 }

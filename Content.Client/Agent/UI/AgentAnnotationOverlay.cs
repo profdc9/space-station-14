@@ -61,11 +61,15 @@ public sealed class AgentAnnotationOverlay : Overlay
             switch (mark.Kind)
             {
                 case AgentMarkKind.Highlight:
-                    if (TryEntityBox(mark, out var box))
+                    if (TryEntityBox(mark, out var box, out var entityUid))
                     {
+                        // Rotated with the grid: a station is generally not aligned to world axes,
+                        // and an axis-aligned box looks visibly crooked against the deck plating.
+                        var angle = _marks.GridRotationOf(entityUid);
+
                         // Outline rather than fill: the human still has to see the thing itself.
-                        handle.DrawRect(box.Enlarged(0.05f), mark.Colour, false);
-                        handle.DrawRect(box.Enlarged(0.08f), mark.Colour.WithAlpha(0.4f), false);
+                        handle.DrawRect(new Box2Rotated(box.Enlarged(0.05f), angle, box.Center), mark.Colour, false);
+                        handle.DrawRect(new Box2Rotated(box.Enlarged(0.08f), angle, box.Center), mark.Colour.WithAlpha(0.4f), false);
                     }
                     break;
 
@@ -75,8 +79,11 @@ public sealed class AgentAnnotationOverlay : Overlay
                         && _marks.TryTileCentre(tileGrid, mark.Tiles[0], out var centre))
                     {
                         var half = new Vector2(0.45f, 0.45f);
-                        handle.DrawRect(new Box2(centre - half, centre + half), mark.Colour, false);
-                        handle.DrawRect(new Box2(centre - half, centre + half), mark.Colour.WithAlpha(0.15f));
+                        var rect = new Box2(centre - half, centre + half);
+                        var angle = _marks.GridRotation(tileGrid);
+
+                        handle.DrawRect(new Box2Rotated(rect, angle, centre), mark.Colour, false);
+                        handle.DrawRect(new Box2Rotated(rect, angle, centre), mark.Colour.WithAlpha(0.15f));
                     }
                     break;
 
@@ -129,7 +136,7 @@ public sealed class AgentAnnotationOverlay : Overlay
             switch (mark.Kind)
             {
                 case AgentMarkKind.Highlight:
-                    if (!TryEntityBox(mark, out var box))
+                    if (!TryEntityBox(mark, out var box, out _))
                         continue;
                     world = new Vector2(box.Center.X, box.Top);
                     break;
@@ -157,9 +164,10 @@ public sealed class AgentAnnotationOverlay : Overlay
         }
     }
 
-    private bool TryEntityBox(AgentMark mark, out Box2 box)
+    private bool TryEntityBox(AgentMark mark, out Box2 box, out EntityUid entity)
     {
         box = default;
+        entity = default;
 
         if (mark.Entity is not { } netEntity)
             return false;
@@ -167,7 +175,8 @@ public sealed class AgentAnnotationOverlay : Overlay
         if (!_entities.TryGetEntity(netEntity, out var uid) || !_entities.EntityExists(uid))
             return false;
 
-        box = _lookup.GetWorldAABB(uid.Value);
+        entity = uid.Value;
+        box = _lookup.GetWorldAABB(entity);
         return true;
     }
 }
