@@ -1,0 +1,20 @@
+{
+  "name": "ss14-copilot-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server exposing a modified Space Station 14 client as advisory tools.",
+  "engines": {
+    "node": ">=23"
+  },
+  "scripts": {
+    "start": "node src/index.ts",
+    "smoke": "node test-bridge.mjs",
+    "ops": "node test-ops.mjs",
+    "snapshot": "node snapshot.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8"
+  }
+}

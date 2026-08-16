@@ -1,0 +1,49 @@
+# Local development server for the SS14 agent copilot.
+#
+# Deliberately not a public server. Automated play is against the rules on Wizard's Den and
+# most public SS14 servers (PLAN.md §11), so all copilot testing happens here.
+#
+# Run with:
+#   dotnet client/bin/Content.Server/Content.Server.dll \
+#     --config-file server/server_config.toml --data-dir server/data
+
+[hub]
+# Never advertise this to the public server hub. Default is already false; set explicitly
+# so an upstream default change can't quietly publish a dev box running an AI player.
+advertise = false
+
+[net]
+port = 1212
+
+# Loopback only. The default "0.0.0.0,::" makes the server reachable from the LAN, which
+# triggers a Windows Firewall prompt and needlessly exposes a dev box running an AI player.
+# Nothing here needs to be reachable off-machine.
+bindto = "127.0.0.1,::1"
+
+[auth]
+# 0 = Optional. Localhost connects without a Wizard's Den account.
+mode = 0
+
+[game]
+hostname = "SS14MCP copilot dev"
+desc = "Local development server for the SS14 agent copilot."
+
+# Saltern: a complete station (engineering, atmos, medbay, cargo, science) with minPlayers 0,
+# so it is playable solo. The 45-player maps in DefaultMapPool are mostly empty corridors
+# with one player in them.
+map = "Saltern"
+map_rotation = false
+
+# Skip the lobby and start the round immediately.
+lobbyenabled = false
+
+soft_max_players = 4
+
+[console]
+# Local connections get host admin. Default true; explicit because the copilot work depends
+# on NOT using admin-gated reads (PLAN.md §4.1 — the atmos debug overlay is off-limits),
+# and it should be visible in config that this account has them available anyway.
+loginlocal = true
+
+[log]
+level = "Info"

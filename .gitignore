@@ -1,0 +1,15 @@
+# The SS14 fork is its own git repository (profdc9/space-station-14, branch agent-copilot).
+# Nesting it here would either swallow 37k commits or create a confusing submodule pointer,
+# and the bridge source that lives inside it is versioned there, next to the code it modifies.
+/client/
+
+# Server runtime state: sqlite database, generated config, round logs.
+/server/data/
+
+/logs/
+
+/mcp/node_modules/
+/mcp/*.tsbuildinfo
+
+# Scratch
+*.log
