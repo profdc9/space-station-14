@@ -451,6 +451,14 @@ whatever atmos actually turns out to be available. MCP server with `observe`, `l
 `highlight`, `mark`, `path_hint`, `notify`, TTL expiry, `clear_marks`.
 *Done when:* the agent can answer "where's the nearest crowbar" by outlining it.
 
+> **Status: complete** (client `61081f856b`, tools `7e34a80`). All three draw types verified
+> rendering over a live round; `clear_marks` verified; TTL auto-expiry verified by placing 5s and
+> 300s marks and confirming only one survived 12s.
+>
+> The done-when scenario has been demonstrated mechanically — `observe` → pick an id → `highlight`
+> puts an outline and label on that entity — but not yet driven by a model actually hunting for a
+> named object during play. That is a Phase 3 exercise, once the human can ask for it in the panel.
+
 **Phase 3 — conversation and chat**
 Side-panel two-way conversation. Read local chat, radio by channel, PDA, announcements.
 `wait_for`. No agent speech in-game yet.
