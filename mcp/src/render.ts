@@ -10,6 +10,7 @@ export type Snapshot = {
     entity: string;
     name: string;
     state: string;
+    canAct?: boolean;
     alerts: string[];
     map: string;
     grid: string | null;
@@ -17,6 +18,7 @@ export type Snapshot = {
     mapPosition: [number, number];
   };
   hands: { hand: string; active: boolean; item?: string; name?: string }[];
+  worn: { slot: string; id: string; name: string }[];
   entities: { name: string; count: number; tiles: ([number, number] | null)[]; ids: string[] }[];
   tiles: {
     centre: [number, number];
@@ -39,6 +41,15 @@ export function renderSnapshot(s: Snapshot, opts: { map?: boolean } = {}): strin
 
   const where = self.tile ? `tile ${self.tile[0]},${self.tile[1]}` : 'off-grid';
   lines.push(`You are ${self.name} — ${self.state}, at ${where}.`);
+
+  // A body with no hands cannot be advised to pick things up. Say so plainly rather than letting
+  // the model recommend actions this body cannot perform.
+  if (self.canAct === false) {
+    lines.push(
+      'NOTE: this body has no hands and no inventory — you may be a ghost, a brain, or otherwise ' +
+      'not embodied. Advice involving picking things up or using items does not apply.',
+    );
+  }
 
   // Hazards first. If the station is on fire, that goes above the furniture inventory.
   if (s.tiles?.notable.length) {
@@ -63,6 +74,10 @@ export function renderSnapshot(s: Snapshot, opts: { map?: boolean } = {}): strin
       ? `Holding: ${held.map(h => `${h.name} (${h.hand}${h.active ? ', active' : ''})`).join(', ')}.`
       : 'Both hands empty.',
   );
+
+  if (s.worn?.length) {
+    lines.push(`Wearing: ${s.worn.map(w => `${w.name} (${w.slot})`).join(', ')}.`);
+  }
 
   // Structure is already in the map; repeating it as an entity list is pure noise.
   const structural = /^(solid wall|reinforced wall|window|reinforced window|grille|plating|catwalk)$/i;
@@ -120,6 +135,12 @@ export function renderDelta(prev: Snapshot, next: Snapshot): string | null {
     const dx = nt[0] - pt[0];
     const dy = nt[1] - pt[1];
     lines.push(`You moved ${Math.abs(dx)} east/west, ${Math.abs(dy)} north/south to ${nt[0]},${nt[1]}.`);
+  }
+
+  const prevWorn = (prev.worn ?? []).map(w => `${w.slot}:${w.name}`).sort().join('|');
+  const nextWorn = (next.worn ?? []).map(w => `${w.slot}:${w.name}`).sort().join('|');
+  if (prevWorn !== nextWorn) {
+    lines.push(`Equipment changed. Now wearing: ${(next.worn ?? []).map(w => w.name).join(', ') || 'nothing'}.`);
   }
 
   const prevHeld = prev.hands.map(h => h.name ?? '-').join('|');

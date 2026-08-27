@@ -198,6 +198,67 @@ server.registerTool(
 );
 
 server.registerTool(
+  'wait_for',
+  {
+    title: 'Wait for something to happen',
+    description:
+      'Blocks until a matching event arrives or the timeout expires, then returns what happened. ' +
+      'Use this instead of calling read_events in a loop — it costs one turn regardless of how ' +
+      'long the wait is. Good for "tell me when they say something" or "wait until the pressure ' +
+      'alert clears". Returns immediately if a matching event is already pending. For a longer ' +
+      'vigil, call it again — nothing is missed between calls, because events are buffered.',
+    inputSchema: {
+      kind: z
+        .enum(['any', 'chat', 'alert', 'human'])
+        .optional()
+        .describe('Event type to wait for. Default any.'),
+      match: z
+        .string()
+        .optional()
+        .describe('Case-insensitive substring the event must contain, e.g. a channel or a word.'),
+      // Capped below the MCP client default request timeout of 60s. A tool that can outlive the
+      // protocol's own timeout fails on the host rather than returning "nothing happened", which
+      // looks like a broken server instead of a quiet station.
+      timeout: z.number().min(1).max(45).optional().describe('Seconds to wait, max 45. Default 25.'),
+    },
+  },
+  async ({ kind, match, timeout }) =>
+    guard(async () => {
+      const deadline = Date.now() + (timeout ?? 25) * 1000;
+      const wanted = (match ?? '').toLowerCase();
+
+      const matches = (e: { event: string; [k: string]: unknown }) => {
+        if (kind && kind !== 'any' && e.event !== kind) return false;
+        if (!wanted) return true;
+        return JSON.stringify(e).toLowerCase().includes(wanted);
+      };
+
+      let cursor = bridge.cursor;
+
+      // Anything already buffered counts — the human may have spoken while the model was thinking,
+      // and making them repeat themselves because of our timing would be obnoxious.
+      const pending = bridge.drainEvents().filter(matches);
+      if (pending.length) return renderEvents(pending);
+
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 500));
+
+        const r = await bridge.call<{
+          cursor: number;
+          events: { event: string; cursor: number; [k: string]: unknown }[];
+        }>('since', { cursor });
+
+        cursor = r.cursor;
+
+        const hits = r.events.filter(matches);
+        if (hits.length) return renderEvents(hits);
+      }
+
+      return `Nothing matching happened in ${timeout ?? 25}s. Call again to keep watching; nothing is missed between calls.`;
+    }),
+);
+
+server.registerTool(
   'highlight',
   {
     title: 'Outline something in the human\'s view',
