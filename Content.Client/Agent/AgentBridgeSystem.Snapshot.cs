@@ -1,10 +1,13 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Content.Shared.Alert;
+using Content.Shared.Chat;
 using Content.Shared.Atmos;
 using Content.Shared.Atmos.Components;
 using Content.Shared.Examine;
 using Content.Shared.Hands.EntitySystems;
+using Content.Shared.Inventory;
 using Content.Shared.IdentityManagement;
 using Content.Shared.Mobs.Components;
 using Content.Shared.Mobs.Systems;
@@ -58,6 +61,7 @@ public sealed partial class AgentBridgeSystem
     [Dependency] private MobStateSystem _mobState = default!;
     [Dependency] private SharedContainerSystem _container = default!;
     [Dependency] private SharedMapSystem _map = default!;
+    [Dependency] private InventorySystem _inventory = default!;
 
     /// <summary>
     ///     Assembles everything the copilot can legitimately observe right now.
@@ -78,6 +82,7 @@ public sealed partial class AgentBridgeSystem
             cursor = _cursor,
             self = BuildSelf(player, map),
             hands = BuildHands(player),
+            worn = BuildWorn(player),
             entities = BuildEntities(player, coords, radius),
             tiles = BuildTiles(player, radius),
         };
@@ -85,6 +90,10 @@ public sealed partial class AgentBridgeSystem
 
     private object BuildSelf(EntityUid player, MapCoordinates map)
     {
+        // "unknown" rather than a guess when there is no MobState: the human may be attached to a
+        // brain, a ghost, or some other entity that is not a mob at all. Saying "alive" there would
+        // be a confident lie, and the copilot needs to be able to tell the human it cannot read the
+        // situation.
         var state = "unknown";
 
         if (HasComp<MobStateComponent>(player))
@@ -97,6 +106,10 @@ public sealed partial class AgentBridgeSystem
                 state = "alive";
         }
 
+        // Capabilities, so the copilot can say "you cannot pick that up, you have no hands" instead
+        // of advising actions the current body cannot perform.
+        var canAct = HasComp<Content.Shared.Hands.Components.HandsComponent>(player);
+
         var alerts = TryComp<AlertsComponent>(player, out var alertComp)
             ? alertComp.Alerts.Keys.Select(k => k.AlertType.ToString()).ToArray()
             : [];
@@ -108,6 +121,7 @@ public sealed partial class AgentBridgeSystem
             entity = Ref(player),
             name = Identity.Name(player, EntityManager),
             state,
+            canAct,
             alerts,
             map = map.MapId.ToString(),
             grid = xform.GridUid is { } g ? Ref(g) : null,
@@ -141,6 +155,42 @@ public sealed partial class AgentBridgeSystem
                 active = held != null && held == active,
                 item = held is { } h ? Ref(h) : null,
                 name = held is { } h2 ? Identity.Name(h2, EntityManager) : null,
+            });
+        }
+
+        return result.ToArray();
+    }
+
+    /// <summary>
+    ///     What the human is wearing, by slot.
+    /// </summary>
+    /// <remarks>
+    ///     Own equipped items only. This is the one container case the honesty rule permits: it is
+    ///     the human's own kit, which they can see on their character sheet at any time. Other
+    ///     people's pockets and the contents of closed lockers stay excluded, per PLAN.md 4.1.
+    ///
+    ///     Worth having because "do I have the thing I need" - a headset, internals, a crowbar - is
+    ///     exactly the sort of question a copilot should answer without the human digging through
+    ///     their own inventory UI.
+    /// </remarks>
+    private object[] BuildWorn(EntityUid player)
+    {
+        if (!HasComp<InventoryComponent>(player))
+            return [];
+
+        var result = new List<object>();
+        var slots = _inventory.GetSlotEnumerator(player);
+
+        while (slots.NextItem(out var item, out var slot))
+        {
+            if (!Exists(item))
+                continue;
+
+            result.Add(new
+            {
+                slot = slot.Name,
+                id = Ref(item),
+                name = Identity.Name(item, EntityManager),
             });
         }
 
@@ -388,6 +438,66 @@ public sealed partial class AgentBridgeSystem
 
         entity = uid;
         return true;
+    }
+
+    /// <summary>
+    ///     Channels the copilot is allowed to hear.
+    /// </summary>
+    /// <remarks>
+    ///     The copilot co-plays one character, so it hears what that character hears and nothing
+    ///     else. Deliberately excluded: OOC and LOOC because they are out-of-character, admin chat
+    ///     and dead chat because they are privileged. Hearing those would make the agent a better
+    ///     informant than the human it is sitting next to, which is the whole thing this design
+    ///     avoids.
+    /// </remarks>
+    private static readonly ChatChannel AudibleChannels =
+        ChatChannel.Local
+        | ChatChannel.Whisper
+        | ChatChannel.Radio
+        | ChatChannel.Server
+        | ChatChannel.Emotes
+        | ChatChannel.Notifications;
+
+    /// <summary>
+    ///     Radio messages carry their channel as escaped brackets at the head of the wrapped
+    ///     message — <c>\[Engineering\]</c>. See docs/client-findings.md D2.
+    /// </summary>
+    private static readonly Regex RadioChannel = new(@"\\\[(.+?)\\\]", RegexOptions.Compiled);
+
+    /// <summary>
+    ///     Records an in-game chat message for the copilot. Called from
+    ///     <see cref="AgentUIController"/>, which owns the subscription to the chat UI.
+    /// </summary>
+    public void RecordChat(ChatMessage message)
+    {
+        if ((message.Channel & AudibleChannels) == 0)
+            return;
+
+        if (message.HideChat || string.IsNullOrWhiteSpace(message.Message))
+            return;
+
+        var channel = message.Channel.ToString();
+
+        // Radio carries a department; without it "Radio" alone is nearly useless to the copilot.
+        if (message.Channel == ChatChannel.Radio)
+        {
+            var match = RadioChannel.Match(message.WrappedMessage);
+
+            if (match.Success)
+                channel = $"Radio:{match.Groups[1].Value}";
+        }
+
+        string? speaker = null;
+
+        if (TryGetEntity(message.SenderEntity, out var sender) && Exists(sender))
+            speaker = Identity.Name(sender.Value, EntityManager);
+
+        RaiseBridgeEvent("chat", new
+        {
+            channel,
+            speaker,
+            text = message.Message,
+        });
     }
 
     /// <summary>

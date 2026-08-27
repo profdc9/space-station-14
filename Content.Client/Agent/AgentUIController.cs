@@ -1,5 +1,7 @@
 using Content.Client.Agent.UI;
 using Content.Client.Gameplay;
+using Content.Client.UserInterface.Systems.Chat;
+using Content.Shared.Chat;
 using Content.Shared.Input;
 using JetBrains.Annotations;
 using Robust.Client.UserInterface;
@@ -22,11 +24,23 @@ public sealed class AgentUIController : UIController,
 {
     private AgentWindow? _window;
     private AgentBridgeSystem? _bridge;
+    private ChatUIController? _chat;
+
+    private void OnChatMessage(ChatMessage message)
+    {
+        _bridge?.RecordChat(message);
+    }
 
     public void OnStateEntered(GameplayState state)
     {
         _window = UIManager.CreateWindow<AgentWindow>();
         _window.MessageEntered += OnMessageEntered;
+
+        // Chat arrives through the chat UI controller rather than an entity event, so the
+        // subscription lives here and forwards into the bridge. UIControllers can reach each
+        // other; an EntitySystem cannot reach a UIController.
+        _chat = UIManager.GetUIController<ChatUIController>();
+        _chat.MessageAdded += OnChatMessage;
 
         // The bridge may have loaded before we did, so seed from whatever it already holds
         // rather than assuming we saw every event.
@@ -43,6 +57,12 @@ public sealed class AgentUIController : UIController,
     public void OnStateExited(GameplayState state)
     {
         CommandBinds.Unregister<AgentUIController>();
+
+        if (_chat != null)
+        {
+            _chat.MessageAdded -= OnChatMessage;
+            _chat = null;
+        }
 
         if (_window == null)
             return;
