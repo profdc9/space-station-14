@@ -68,19 +68,30 @@ public sealed partial class AgentBridgeSystem : EntitySystem
             return;
         }
 
-        // Without this, Update only runs during predicted ticks - so whenever prediction is not
-        // ticking (between rounds, while dead, after a server restart) the bridge accepts
-        // connections and then silently ignores every frame the copilot sends. The bridge is not
-        // gameplay logic and must pump regardless of prediction.
-        UpdatesOutsidePrediction = true;
-
         _server = new AgentBridgeServer(Log);
         _server.Start(_cfg.GetCVar(AgentCVars.BridgePort), _cfg.GetCVar(AgentCVars.BridgeToken));
     }
 
-    public override void Update(float frameTime)
+    /// <summary>
+    ///     Pumps the bridge.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///     <b>FrameUpdate, not Update.</b> Update only runs during predicted simulation ticks, so
+    ///     whenever prediction is not ticking - between rounds, while dead, after a server restart -
+    ///     the bridge accepted connections and then silently ignored every frame. No error, no log.
+    ///     </para>
+    ///     <para>
+    ///     Setting <c>UpdatesOutsidePrediction</c> looks like the fix and is not: it makes the
+    ///     system tick inside the state-application path, where reading entity state trips
+    ///     <c>ClientGameStateManager.ResetPredictedEntities</c>'s debug assert and takes the client
+    ///     down. FrameUpdate runs once per rendered frame, outside the simulation entirely, which
+    ///     is where read-only transport work belongs.
+    ///     </para>
+    /// </remarks>
+    public override void FrameUpdate(float frameTime)
     {
-        base.Update(frameTime);
+        base.FrameUpdate(frameTime);
 
         if (_server == null)
             return;
