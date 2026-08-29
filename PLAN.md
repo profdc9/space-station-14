@@ -465,6 +465,25 @@ Side-panel two-way conversation. Read local chat, radio by channel, PDA, announc
 *Done when:* the human can ask questions mid-round and get useful answers, and the agent
 proactively flags radio traffic the human missed.
 
+> **Status: mostly complete** (client `87fc2de3a0`, tools `bd2482a`).
+>
+> | | |
+> |---|---|
+> | Panel conversation, both ways | verified live |
+> | Local chat, whisper, emotes | verified live, correct channel and speaker |
+> | `wait_for` | verified; exposed and fixed a timeout longer than MCP's own 60s limit |
+> | Worn equipment | verified live: 8 slots on a fresh passenger |
+> | `canAct` | verified against a brain (false) and a live body (true) |
+> | Radio **department** | **inferred, not observed** — see below |
+> | Announcements, PDA | untested |
+>
+> Radio: the extraction regex passes 9/9 department names when tested against a message
+> reconstructed from `RadioSystem.cs:117` and `headset-component.ftl:2`, and does not falsely
+> match a non-radio message. The transport path is proven for Local/Whisper/Emotes, which use
+> identical code. But no real radio message has been observed arriving end to end, so this is
+> two verified halves rather than one verified whole. Worth closing with a live message when
+> someone is at the keyboard.
+
 > **Phases 1–3 are the deliverable.** A genuinely useful copilot that cannot touch the world.
 > Live with it for several rounds before granting hands. Most of the value is here; all of the
 > risk is after.
