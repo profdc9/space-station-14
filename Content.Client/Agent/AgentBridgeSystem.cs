@@ -68,6 +68,12 @@ public sealed partial class AgentBridgeSystem : EntitySystem
             return;
         }
 
+        // Without this, Update only runs during predicted ticks - so whenever prediction is not
+        // ticking (between rounds, while dead, after a server restart) the bridge accepts
+        // connections and then silently ignores every frame the copilot sends. The bridge is not
+        // gameplay logic and must pump regardless of prediction.
+        UpdatesOutsidePrediction = true;
+
         _server = new AgentBridgeServer(Log);
         _server.Start(_cfg.GetCVar(AgentCVars.BridgePort), _cfg.GetCVar(AgentCVars.BridgeToken));
     }
