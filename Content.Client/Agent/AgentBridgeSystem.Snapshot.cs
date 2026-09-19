@@ -11,6 +11,7 @@ using Content.Shared.Inventory;
 using Content.Shared.IdentityManagement;
 using Content.Shared.Mobs.Components;
 using Content.Shared.Mobs.Systems;
+using Content.Shared.Storage;
 using Robust.Client.GameObjects;
 using Robust.Shared.Containers;
 using Robust.Shared.Map;
@@ -33,9 +34,11 @@ namespace Content.Client.Agent;
 ///     line-of-sight check the game uses for its own context menu.
 ///     </description></item>
 ///     <item><description>
-///     Contained entities are excluded outright. PVS applies no container culling — the client
-///     legitimately holds the contents of closed lockers and other players' bags — so mirroring
-///     what the client knows would be a cheat. See PLAN.md §4.1.
+///     Contained entities are excluded from the world sweep. PVS applies no container culling — the
+///     client legitimately holds the contents of closed lockers and other players' bags — so
+///     mirroring what the client knows would be a cheat. See PLAN.md §4.1. The one exception is the
+///     human's own kit: what they are wearing and carrying, which they can open and read at any
+///     time. See <see cref="BuildWorn"/> and <see cref="BuildContents"/>.
 ///     </description></item>
 ///     </list>
 /// </remarks>
@@ -44,6 +47,10 @@ public sealed partial class AgentBridgeSystem
     /// <summary>Largest observation radius in tiles. Beyond this the payload stops being readable.</summary>
     private const int MaxRadius = 12;
     private const int DefaultRadius = 7;
+
+    /// <summary>Most items reported from one container, and how deep to descend into nested ones.</summary>
+    private const int MaxContentsPerContainer = 24;
+    private const int MaxContentsDepth = 2;
 
     private readonly HashSet<string> _knownAlerts = new();
     private readonly HashSet<string> _seenAlerts = new();
@@ -155,6 +162,7 @@ public sealed partial class AgentBridgeSystem
                 active = held != null && held == active,
                 item = held is { } h ? Ref(h) : null,
                 name = held is { } h2 ? Identity.Name(h2, EntityManager) : null,
+                contents = held is { } h3 ? BuildContents(h3, MaxContentsDepth) : null,
             });
         }
 
@@ -191,10 +199,64 @@ public sealed partial class AgentBridgeSystem
                 slot = slot.Name,
                 id = Ref(item),
                 name = Identity.Name(item, EntityManager),
+                contents = BuildContents(item, MaxContentsDepth),
             });
         }
 
         return result.ToArray();
+    }
+
+    /// <summary>
+    ///     What is inside one of the human's own containers — backpack, satchel, belt, pockets, or
+    ///     whatever is in hand.
+    /// </summary>
+    /// <remarks>
+    ///     The second deliberate exception to the container rule in the class remarks, and safe for
+    ///     the same reason as <see cref="BuildWorn"/>: this is the human's own kit, which they can
+    ///     open and read at any time. Other people's bags and the contents of closed lockers stay
+    ///     excluded — those the client holds only because PVS does not cull containers.
+    ///
+    ///     Added because "where is my nitrogen tank" was unanswerable. The tank was in the human's
+    ///     own backpack, the copilot could not see it, and the human suffocated.
+    /// </remarks>
+    private object[]? BuildContents(EntityUid item, int depth)
+    {
+        if (depth <= 0 || !TryComp<StorageComponent>(item, out var storage))
+            return null;
+
+        var contained = storage.Container.ContainedEntities;
+
+        if (contained.Count == 0)
+            return null;
+
+        var result = new List<object>();
+
+        foreach (var child in contained)
+        {
+            if (!Exists(child))
+                continue;
+
+            var name = Identity.Name(child, EntityManager);
+
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            result.Add(new
+            {
+                id = Ref(child),
+                name,
+
+                // A box inside the bag is worth opening too, but only so far: nesting is rare and
+                // an unbounded descent would put the whole of a toolbox-in-a-duffel in every
+                // snapshot.
+                contents = BuildContents(child, depth - 1),
+            });
+
+            if (result.Count >= MaxContentsPerContainer)
+                break;
+        }
+
+        return result.Count > 0 ? result.ToArray() : null;
     }
 
     private object[] BuildEntities(EntityUid player, EntityCoordinates coords, int radius)
