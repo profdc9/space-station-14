@@ -28,6 +28,16 @@ let sent = 0;
 let outboxOffset = 0;
 let nextId = 1000;
 
+// Reconnect backoff. The client is often simply not running yet - during a reset the daemon
+// starts before the client finishes loading, and after a session it keeps trying against a dead
+// bridge until someone kills it. A flat 1s retry logged every attempt turned a 6 MB events log
+// into 97.8% "disconnected, retrying" (121,741 of 124,502 lines), burying the real events.
+const RETRY_MIN = 1000;
+const RETRY_MAX = 30000;
+let retryDelay = RETRY_MIN;
+let attempts = 0;
+let wasConnected = false;
+
 const log = line => fs.appendFileSync(eventsLog, line + '\n');
 
 function connect() {
@@ -38,7 +48,13 @@ function connect() {
       op: 'say_to_human',
       params: { text: 'Copilot connected. I am watching your alerts and chat.' },
     }) + '\n');
-    log(`[${new Date().toISOString()}] connected`);
+    log(attempts
+      ? `[${new Date().toISOString()}] connected after ${attempts} attempt(s)`
+      : `[${new Date().toISOString()}] connected`);
+
+    retryDelay = RETRY_MIN;
+    attempts = 0;
+    wasConnected = true;
 
     const rl = readline.createInterface({ input: sock });
     rl.on('line', line => {
@@ -54,9 +70,20 @@ function connect() {
 
   sock.on('error', () => {});
   sock.on('close', () => {
-    log(`[${new Date().toISOString()}] disconnected, retrying`);
+    // Log the transition, not the waiting. A live connection dropping is news; the hundredth
+    // failed attempt against a client that is still not running is not.
+    if (wasConnected) {
+      log(`[${new Date().toISOString()}] disconnected, retrying`);
+    } else if (attempts === 0) {
+      log(`[${new Date().toISOString()}] bridge unavailable, retrying with backoff`);
+    }
+
+    wasConnected = false;
+    attempts++;
     sock = null;
-    setTimeout(connect, 1000);
+
+    setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
   });
 }
 
