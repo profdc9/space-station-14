@@ -4,6 +4,9 @@
 // context window and bury the two or three facts that actually matter. So: prose first, numbers
 // only where they carry information, and the map only when the layout is the point.
 
+/** An item in the human's own bag or pocket. Nested, because boxes go inside backpacks. */
+export type Carried = { id: string; name: string; contents?: Carried[] | null };
+
 export type Snapshot = {
   cursor: number;
   self: {
@@ -17,8 +20,8 @@ export type Snapshot = {
     tile: [number, number] | null;
     mapPosition: [number, number];
   };
-  hands: { hand: string; active: boolean; item?: string; name?: string }[];
-  worn: { slot: string; id: string; name: string }[];
+  hands: { hand: string; active: boolean; item?: string; name?: string; contents?: Carried[] | null }[];
+  worn: { slot: string; id: string; name: string; contents?: Carried[] | null }[];
   entities: { name: string; count: number; tiles: ([number, number] | null)[]; ids: string[] }[];
   tiles: {
     centre: [number, number];
@@ -28,6 +31,13 @@ export type Snapshot = {
     notable: { tile: [number, number]; kind: string; kelvin?: number; state?: number }[];
   } | null;
 };
+
+/** "crowbar, toolbox (holding wrench, screwdriver), flashlight" - nesting inline, since it is rare. */
+function describeCarried(items: Carried[]): string {
+  return items
+    .map(i => (i.contents?.length ? `${i.name} (holding ${describeCarried(i.contents)})` : i.name))
+    .join(', ');
+}
 
 /** Alerts worth leading with. Everything else is ambient and gets mentioned only in passing. */
 const URGENT = new Set([
@@ -77,6 +87,14 @@ export function renderSnapshot(s: Snapshot, opts: { map?: boolean } = {}): strin
 
   if (s.worn?.length) {
     lines.push(`Wearing: ${s.worn.map(w => `${w.name} (${w.slot})`).join(', ')}.`);
+  }
+
+  // Own bags and pockets, listed separately from the world sweep. This is the answer to "where is
+  // my tank" - it is in the backpack, and before this the copilot could not see it.
+  for (const holder of [...(s.worn ?? []), ...s.hands]) {
+    const name = 'name' in holder ? holder.name : undefined;
+    if (!name || !holder.contents?.length) continue;
+    lines.push(`  ${name} holds: ${describeCarried(holder.contents)}`);
   }
 
   // Structure is already in the map; repeating it as an entity list is pure noise.
@@ -137,10 +155,29 @@ export function renderDelta(prev: Snapshot, next: Snapshot): string | null {
     lines.push(`You moved ${Math.abs(dx)} east/west, ${Math.abs(dy)} north/south to ${nt[0]},${nt[1]}.`);
   }
 
-  const prevWorn = (prev.worn ?? []).map(w => `${w.slot}:${w.name}`).sort().join('|');
-  const nextWorn = (next.worn ?? []).map(w => `${w.slot}:${w.name}`).sort().join('|');
+  // Contents are part of the signature: losing a tank out of your own backpack is exactly the
+  // change worth reporting, and it does not move a single worn item.
+  const wornSig = (w: Snapshot['worn']) =>
+    (w ?? []).map(x => `${x.slot}:${x.name}:${(x.contents ?? []).map(c => c.name).sort().join('+')}`).sort().join('|');
+
+  const prevWorn = wornSig(prev.worn);
+  const nextWorn = wornSig(next.worn);
   if (prevWorn !== nextWorn) {
     lines.push(`Equipment changed. Now wearing: ${(next.worn ?? []).map(w => w.name).join(', ') || 'nothing'}.`);
+
+    for (const w of next.worn ?? []) {
+      const was = (prev.worn ?? []).find(p => p.slot === w.slot && p.name === w.name);
+      if (!was) continue;
+
+      const before = new Set((was.contents ?? []).map(c => c.name));
+      const after = (w.contents ?? []).map(c => c.name);
+
+      const added = after.filter(n => !before.has(n));
+      for (const n of after) before.delete(n);
+
+      if (added.length) lines.push(`  into ${w.name}: ${added.join(', ')}.`);
+      if (before.size) lines.push(`  out of ${w.name}: ${[...before].join(', ')}.`);
+    }
   }
 
   const prevHeld = prev.hands.map(h => h.name ?? '-').join('|');
