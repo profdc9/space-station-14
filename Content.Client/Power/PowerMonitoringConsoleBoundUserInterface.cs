@@ -25,8 +25,15 @@ public sealed class PowerMonitoringConsoleBoundUserInterface : BoundUserInterfac
 
         var castState = (PowerMonitoringConsoleBoundInterfaceState) state;
 
+        // Disposed, not just null. Closing the window disposes its controls but leaves this
+        // reference non-null, and the server keeps sending state afterwards - the next update then
+        // calls AddChild on a disposed container. In a release build DebugTools.Assert compiles
+        // away and this goes unnoticed; in a debug build it takes the whole client down.
+        if (_menu is not { Disposed: false })
+            return;
+
         EntMan.TryGetComponent<TransformComponent>(Owner, out var xform);
-        _menu?.ShowEntites
+        _menu.ShowEntites
             (castState.TotalSources,
             castState.TotalBatteryUsage,
             castState.TotalLoads,
