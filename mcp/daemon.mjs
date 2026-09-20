@@ -74,10 +74,18 @@ const WATCH = {
   Bleed:        { level: 'normal', say: 'You are bleeding. Gauze or a medkit, or it will not stop on its own.' },
   Starving:     { level: 'normal', say: 'Starving - this does real damage now. Find food.' },
   Parched:      { level: 'normal', say: 'Parched - find a drink.' },
-  SuitPower:    { level: 'normal', say: 'Suit power is low.' },
-  Stamina:      { level: 'low',    say: 'Stamina is gone - you are about to collapse.' },
   Ensnared:     { level: 'low',    say: 'Ensnared. Click yourself or move to break free.' },
 };
+
+// Never watch these. They are persistent gauges, not warnings - the alert exists for as long as
+// the mob does, and it is the severity that moves, which the bridge does not send. Watching
+// Stamina announced "you are about to collapse" to a healthy passenger the instant they spawned.
+// Firing on a gauge is how a watcher teaches the human to ignore it.
+const GAUGES = new Set([
+  'Health', 'HumanHealth', 'BorgHealth', 'Stamina', 'Breathing', 'Pressure', 'Temperature',
+  'Hunger', 'Thirst', 'Internals', 'Battery', 'BorgBattery', 'AiBattery', 'Essence', 'SuitPower',
+  'Piloting', 'PilotingShuttle', 'Pulling', 'Walking',
+]);
 
 // The same alert flapping on and off must not become a wall of panel spam - Bleed alone flapped
 // 4 times in as many seconds in the last session's log.
@@ -92,7 +100,7 @@ function watch(msg) {
   if (msg.event !== 'alert' || msg.state !== 'entered')
     return;
 
-  const rule = WATCH[msg.alert];
+  const rule = GAUGES.has(msg.alert) ? undefined : WATCH[msg.alert];
   if (!rule)
     return;
 
